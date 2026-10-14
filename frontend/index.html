@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f40000">
+  <title>Importação de contratos | Foco</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --foco-red: #f40000; --foco-ink: #202020; --foco-muted: #777; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #fff; color: var(--foco-ink); font-family: Arial, Helvetica, sans-serif; }
+    .brand-band { position: fixed; inset: 0 auto 0 0; width: clamp(10px, 2vw, 24px); background: var(--foco-red); }
+    .page { min-height: 100vh; display: grid; grid-template-columns: minmax(250px, .8fr) minmax(360px, 1.2fr); max-width: 1160px; margin: auto; padding: 56px clamp(24px, 7vw, 92px); gap: clamp(42px, 8vw, 112px); align-items: center; }
+    .intro { align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; padding: 14px 0; }
+    .brand-logo { display: block; width: min(100%, 220px); height: auto; }
+    .eyebrow { margin-top: auto; color: var(--foco-red); font-size: 12px; text-transform: uppercase; letter-spacing: .16em; font-weight: 700; }
+    h1 { display: block; width: 100%; max-width: 430px; margin: 12px 0 14px; font-size: clamp(36px, 5vw, 54px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.08; overflow-wrap: normal; word-break: normal; }
+    .intro-copy { max-width: 370px; color: var(--foco-muted); font-size: 15px; line-height: 1.65; }
+    .accent-line { width: 42px; height: 3px; border-radius: 9px; background: var(--foco-red); margin: 22px 0; }
+    .panel { width: 100%; padding: clamp(24px, 4vw, 42px); border: 1px solid #ededed; border-radius: 4px; box-shadow: 0 18px 55px rgba(25,25,25,.07); }
+    .panel-heading { margin: 0 0 7px; font-size: 20px; letter-spacing: -.4px; }
+    .panel-copy { margin: 0 0 28px; color: var(--foco-muted); font-size: 13px; line-height: 1.5; }
+    .field-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+    .file-input { display: block; width: 100%; padding: 12px; border: 1px solid #dedede; border-radius: 3px; background: #fff; color: #555; font: inherit; font-size: 12px; }
+    .file-input::file-selector-button { border: 0; background: #fff0f0; color: var(--foco-red); border-radius: 2px; padding: 9px 12px; margin-right: 12px; font-weight: 700; cursor: pointer; }
+    .action-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .action-option { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 12px; border: 1px solid #dedede; border-radius: 3px; cursor: pointer; font-size: 12px; transition: .18s ease; }
+    .action-option:has(input:checked) { border-color: var(--foco-red); background: #fff7f7; }
+    .action-option input { accent-color: var(--foco-red); }
+    .submit-btn { width: 100%; min-height: 48px; margin-top: 24px; border: 0; border-radius: 3px; color: #fff; background: var(--foco-red); font-weight: 700; font-size: 13px; cursor: pointer; transition: background .18s ease, opacity .18s ease; }
+    .submit-btn:hover { background: #d90000; }
+    .submit-btn:disabled { opacity: .55; cursor: wait; }
+    .status { margin-top: 18px; font-size: 13px; }
+    .loading { color: #555; }
+    .result { padding: 15px; border: 1px solid #eee; background: #fafafa; line-height: 1.8; }
+    .detail-list { margin: 12px 0 0; padding: 0; list-style: none; max-height: 260px; overflow: auto; border-top: 1px solid #e8e8e8; }
+    .detail-list li { padding: 9px 0; border-bottom: 1px solid #e8e8e8; font: 12px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
+    .error { color: #b42318; padding: 12px; border: 1px solid #f2c7c4; background: #fff8f7; line-height: 1.5; }
+    .hidden { display: none !important; }
+    .footer-note { color: #999; font-size: 11px; line-height: 1.5; }
+    @media (max-width: 760px) { .page { grid-template-columns: 1fr; gap: 30px; padding: 34px 26px 34px 42px; } .intro { gap: 30px; } .eyebrow { margin-top: 0; } h1 { font-size: 39px; } .panel { padding: 24px 20px; } }
+    @media (max-width: 390px) { .action-options { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="brand-band" aria-hidden="true"></div>
+  <main class="page">
+    <section class="intro" aria-labelledby="page-title">
+      <img class="brand-logo" src="foco-logo.png" alt="Foco aluguel de carros">
+      <div>
+        <p class="eyebrow">Operação · DMA Coral</p>
+        <div class="accent-line" aria-hidden="true"></div>
+        <h1 id="page-title">Importação de contratos</h1>
+        <p class="intro-copy">Envie sua planilha e escolha como a regra DMA será aplicada aos contratos.</p>
+      </div>
+      <p class="footer-note">Foco Aluguel de Carros<br>Conciliação DMA</p>
+    </section>
+
+    <section class="panel" aria-labelledby="form-title">
+      <h2 class="panel-heading" id="form-title">Preparar processamento</h2>
+      <p class="panel-copy">Preencha as informações abaixo para iniciar o envio.</p>
+      <form id="uploadForm">
+        <div style="margin-bottom: 24px">
+          <label class="field-label" for="fileInput">Planilha de contratos</label>
+          <input class="file-input" type="file" id="fileInput" accept=".xlsx,.xls" required>
+        </div>
+        <fieldset style="border:0;padding:0;margin:0">
+          <legend class="field-label">Ação para os contratos</legend>
+          <div class="action-options">
+            <label class="action-option"><input type="radio" name="acao" value="Desconsiderar DMA" checked><span>Desconsiderar DMA</span></label>
+            <label class="action-option"><input type="radio" name="acao" value="Considerar DMA"><span>Considerar DMA</span></label>
+          </div>
+        </fieldset>
+        <button class="submit-btn" type="submit" id="btnSubmit">Processar contratos <span aria-hidden="true">→</span></button>
+      </form>
+      <div id="statusContainer" class="status hidden" aria-live="polite">
+        <p id="loading" class="loading hidden">Processando planilha na API simulada…</p>
+        <div id="resultado" class="result hidden">
+          <p id="resModo"></p><p id="resTotal"></p><p id="resSucesso" style="color:#18794e"></p><p id="resFalhas" style="color:#b42318"></p><ul id="resDetalhes" class="detail-list"></ul>
+        </div>
+        <p id="errorMessage" class="error hidden"></p>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const btnSubmit = document.getElementById('btnSubmit');
+    const statusContainer = document.getElementById('statusContainer');
+    const loading = document.getElementById('loading');
+    const resultado = document.getElementById('resultado');
+    const errorMessage = document.getElementById('errorMessage');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = fileInput.files[0];
+      if (!file) return;
+      const acao = document.querySelector('input[name="acao"]:checked').value;
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('acao', acao);
+      statusContainer.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      resultado.classList.add('hidden');
+      errorMessage.classList.add('hidden');
+      btnSubmit.disabled = true;
+      try {
+        const response = await fetch('http://127.0.0.1:8000/api/v1/importar-contratos', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || data.message || 'Não foi possível processar a planilha.');
+        document.getElementById('resModo').textContent = data.modo === 'simulacao' ? 'API simulada: nenhum dado enviado para a API real.' : 'API real';
+        document.getElementById('resTotal').textContent = `Total de contratos: ${data.total ?? 0}`;
+        document.getElementById('resSucesso').textContent = `✓ Sucessos: ${data.sucesso ?? 0}`;
+document.getElementById('resFalhas').textContent = `Falhas: ${data.falhas ?? 0}`;
+        const detalhes = document.getElementById('resDetalhes');
+        detalhes.replaceChildren();
+        for (const item of data.detalhes ?? []) {
+          const linha = document.createElement('li');
+          linha.textContent = `Contrato: ${item.contrato} | considerar_dma: ${item.considerar_dma} | desconsiderar_dma: ${item.desconsiderar_dma} | ${item.status}`;
+          detalhes.appendChild(linha);
+        }
+        resultado.classList.remove('hidden');
+      } catch (error) {
+        errorMessage.textContent = error.message || 'Erro na comunicação com o backend.';
+        errorMessage.classList.remove('hidden');
+      } finally {
+        loading.classList.add('hidden');
+        btnSubmit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Local Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated executable/build artifacts
+build/
+dist/
+*.exe
+*.spec
+
+# Local business data and generated reports
+*.xlsx
+*.xls
+*.xlsm
+Relatorio_DMA_*
+
+# Editor and operating-system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.log
