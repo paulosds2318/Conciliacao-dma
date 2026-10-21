@@ -12,8 +12,10 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import pandas as pd
-from app.config import MODO_TESTE_API
+from app.config import CORAL_API_URL, MODO_TESTE_API
 from app.services import detectar_cabecalho, processar_e_enviar_planilha
+from app.spreadsheet import inspecionar_planilha_xlsx
+from app.journal import connect as connect_journal, count_items, iter_items, page_items
 
 RED = "#f40000"
 RED_HOVER = "#d90000"
@@ -23,6 +25,13 @@ MUTED = "#777777"
 WHITE = "#ffffff"
 BORDER = "#e9e9e9"
 GREEN = "#18794e"
+
+
+def safe_excel_text(value):
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
 
 
 def resource_path(relative_path):
@@ -41,6 +50,7 @@ class DMADesktopApp(tk.Tk):
         if icon_path.exists():
             self.iconbitmap(default=str(icon_path))
         self.result_queue = queue.Queue()
+        self.inspection_queue = queue.Queue()
         self.selected_file = tk.StringVar()
         self.selected_name = tk.StringVar(value="Nenhuma planilha selecionada")
         self.selected_folder = tk.StringVar(value="Excel .xlsx ou .xls")
@@ -49,9 +59,14 @@ class DMADesktopApp(tk.Tk):
         self.contract_count = tk.StringVar(value="Contratos encontrados: --")
         self.tem_cabecalho = tk.BooleanVar(value=True)
         self.preview_df = None
+        self.column_counts = {}
+        self.log_page = 0
+        self.page_size = 200
         self.columns = []
         self.log_filter = tk.StringVar(value="Todos")
         self.log_rows = []
+        self.details_db_path = None
+        self.job_id = None
         self.report_metadata = None
         self._build_styles()
         self._build_layout()
@@ -134,7 +149,6 @@ class DMADesktopApp(tk.Tk):
 
         self.run_button = tk.Button(form, text="Processar contratos  \u2192", command=self._process, bg=RED, fg=WHITE, activebackground=RED_HOVER, activeforeground=WHITE, relief="flat", padx=12, pady=10, font=("Arial", 9, "bold"), cursor="hand2", disabledforeground="#ffffff")
         self.run_button.pack(fill="x", pady=(16, 0))
-
         self.status = tk.StringVar(value="")
         tk.Label(right, textvariable=self.status, fg=MUTED, bg=WHITE, font=("Arial", 9), anchor="w").grid(row=1, column=0, sticky="ew", pady=(7, 4))
 
@@ -169,7 +183,13 @@ class DMADesktopApp(tk.Tk):
             style="Column.TCombobox",
         )
         self.log_filter_box.pack(side="left", padx=(7, 0))
-        self.log_filter_box.bind("<<ComboboxSelected>>", self._apply_log_filter)
+        self.log_filter_box.bind("<<ComboboxSelected>>", self._change_log_filter)
+        self.page_label = tk.StringVar(value="Página 1")
+        self.previous_page_button = tk.Button(filter_bar, text="‹", command=self._previous_page, state="disabled", relief="flat", bg=WHITE, fg=INK)
+        self.previous_page_button.pack(side="right", padx=(4, 0))
+        tk.Label(filter_bar, textvariable=self.page_label, fg=MUTED, bg=WHITE, font=("Arial", 8)).pack(side="right", padx=4)
+        self.next_page_button = tk.Button(filter_bar, text="›", command=self._next_page, state="disabled", relief="flat", bg=WHITE, fg=INK)
+        self.next_page_button.pack(side="right", padx=(4, 0))
         self.export_button = tk.Button(
             filter_bar,
             text="Exportar relatório Excel",
@@ -220,8 +240,11 @@ class DMADesktopApp(tk.Tk):
         self.selected_name.set(Path(path).name)
         self.selected_folder.set(str(Path(path).parent))
         self.remove_button.configure(state="normal")
-        self.header_checkbox.configure(state="normal")
-        self.status.set("Planilha carregada. Confira a coluna e a quantidade de contratos.")
+        self.header_checkbox.configure(state="disabled" if Path(path).suffix.lower() in (".xlsx", ".xlsm") else "normal")
+        if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+            self.select_button.configure(state="disabled")
+        if Path(path).suffix.lower() not in (".xlsx", ".xlsm"):
+            self.status.set("Planilha carregada. Confira a coluna e a quantidade de contratos.")
         self._reset_results()
 
     def _excel_column_name(self, index):
@@ -232,14 +255,40 @@ class DMADesktopApp(tk.Tk):
             index -= 1
         return f"Coluna {name}"
 
+    def _normalize_headers(self, values):
+        names = []
+        used = set()
+        for index, value in enumerate(values):
+            name = str(value).strip() if pd.notna(value) else ""
+            if not name:
+                name = self._excel_column_name(index)
+            base = name
+            suffix = 2
+            while name.casefold() in used:
+                name = f"{base} ({suffix})"
+                suffix += 1
+            used.add(name.casefold())
+            names.append(name)
+        return names
+
     def _reload_columns(self):
         path = self.selected_file.get()
         if not path:
             return
         try:
+            if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+                header = self.tem_cabecalho.get()
+                self.column_box.configure(state="disabled")
+                self.header_checkbox.configure(state="disabled")
+                self.select_button.configure(state="disabled")
+                self.remove_button.configure(state="disabled")
+                self.status.set("Lendo a planilha em fluxo para contar os contratos...")
+                threading.Thread(target=self._inspection_worker, args=(path, header), daemon=True).start()
+                self.after(100, self._poll_inspection)
+                return
             raw = pd.read_excel(path, header=None)
             if self.tem_cabecalho.get():
-                names = [str(value).strip() for value in raw.iloc[0].tolist()]
+                names = self._normalize_headers(raw.iloc[0].tolist())
                 self.preview_df = raw.iloc[1:].copy()
                 self.preview_df.columns = names
                 populated = [name for name in names if self.preview_df[name].notna().any()]
@@ -251,20 +300,57 @@ class DMADesktopApp(tk.Tk):
                 populated = [name for name in names if self.preview_df[name].notna().any()]
                 preferred = populated[0] if populated else (names[0] if names else "")
             self.columns = names
+            self.column_counts = {}
             self.column_box.configure(values=names, state="readonly" if names else "disabled")
             self.contract_column.set(preferred)
             self._update_contract_count()
         except Exception as error:
             messagebox.showerror("Nao foi possivel ler a planilha", str(error), parent=self)
 
+    def _inspection_worker(self, path, header):
+        try:
+            result = inspecionar_planilha_xlsx(path, header)
+            self.inspection_queue.put((path, header, True, result))
+        except Exception as error:
+            self.inspection_queue.put((path, header, False, str(error)))
+
+    def _poll_inspection(self):
+        try:
+            path, header, success, result = self.inspection_queue.get_nowait()
+        except queue.Empty:
+            self.after(100, self._poll_inspection)
+            return
+        if path != self.selected_file.get() or header != self.tem_cabecalho.get():
+            return
+        self.header_checkbox.configure(state="normal")
+        self.select_button.configure(state="normal")
+        self.remove_button.configure(state="normal" if self.selected_file.get() else "disabled")
+        if not success:
+            self.column_box.configure(state="disabled")
+            self.status.set("Nao foi possivel ler a planilha.")
+            messagebox.showerror("Nao foi possivel ler a planilha", result, parent=self)
+            return
+        self.preview_df = None
+        self.columns = result["colunas"]
+        self.column_counts = dict(zip(self.columns, result["contagens"]))
+        populated = [name for name in self.columns if self.column_counts.get(name, 0)]
+        preferred = next((name for name in populated if "contrato" in name.casefold()), populated[0] if populated else (self.columns[0] if self.columns else ""))
+        self.column_box.configure(values=self.columns, state="readonly" if self.columns else "disabled")
+        self.contract_column.set(preferred)
+        self._update_contract_count()
+        self.status.set("Planilha carregada. Confira a coluna e a quantidade de contratos.")
+
     def _update_contract_count(self, _event=None):
         column = self.contract_column.get()
-        if self.preview_df is None or not column or column not in self.preview_df.columns:
+        if not column or (column not in self.column_counts and (self.preview_df is None or column not in self.preview_df.columns)):
             self.contract_count.set("Contratos encontrados: --")
             return
-        values = self.preview_df[column]
-        filled = values.notna() & values.astype(str).str.strip().ne("")
-        count = int(filled.sum())
+        if column in self.column_counts:
+            count = self.column_counts[column]
+        else:
+            values = self.preview_df[column]
+            filled = values.notna() & values.astype(str).str.strip().ne("")
+            count = int(filled.sum())
         label = "contrato encontrado" if count == 1 else "contratos encontrados"
         self.contract_count.set(f"{count} {label}")
 
@@ -284,6 +370,8 @@ class DMADesktopApp(tk.Tk):
         self.contract_count.set("Contratos encontrados: --")
         self.tem_cabecalho.set(True)
         self.preview_df = None
+        self.column_counts = {}
+        self.columns = []
         self.column_box.configure(values=(), state="disabled")
         self.header_checkbox.configure(state="disabled")
         self.remove_button.configure(state="disabled")
@@ -293,6 +381,9 @@ class DMADesktopApp(tk.Tk):
     def _reset_results(self):
         self.column_used.set("")
         self.log_rows = []
+        self.details_db_path = None
+        self.job_id = None
+        self.log_page = 0
         self.report_metadata = None
         self.export_button.configure(state="disabled")
         for item in self.table.get_children():
@@ -328,9 +419,17 @@ class DMADesktopApp(tk.Tk):
             ("Falhas", self.report_metadata["falhas"]),
             ("Linhas vazias ignoradas", self.report_metadata["linhas_ignoradas"]),
         ]
+        if self.job_id and self.details_db_path:
+            try:
+                self._export_report_stream(destination, summary)
+                messagebox.showinfo("Relatório salvo", f"O relatório foi salvo em:\n{destination}", parent=self)
+            except Exception as error:
+                messagebox.showerror("Erro ao exportar relatório", str(error), parent=self)
+            return
+
         details = [
             {
-                "Contrato": item.get("contrato", ""),
+                "Contrato": safe_excel_text(item.get("contrato", "")),
                 "Considerar DMA": str(item.get("considerar_dma", "")).lower(),
                 "Desconsiderar DMA": str(item.get("desconsiderar_dma", "")).lower(),
                 "Resultado": item.get("status", ""),
@@ -361,19 +460,81 @@ class DMADesktopApp(tk.Tk):
         except Exception as error:
             messagebox.showerror("Erro ao exportar relatório", str(error), parent=self)
 
+    def _export_report_stream(self, destination, summary):
+        from openpyxl import Workbook
+        from openpyxl.cell import WriteOnlyCell
+        from openpyxl.styles import Font, PatternFill
+
+        workbook = Workbook(write_only=True)
+        header_fill = PatternFill(fill_type="solid", fgColor="F40000")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        def append_header(sheet, labels):
+            cells = []
+            for label in labels:
+                cell = WriteOnlyCell(sheet, value=label)
+                cell.fill, cell.font = header_fill, header_font
+                cells.append(cell)
+            sheet.append(cells)
+
+        summary_sheet = workbook.create_sheet("Resumo")
+        append_header(summary_sheet, ["Informação", "Valor"])
+        for row in summary:
+            summary_sheet.append(list(row))
+        summary_sheet.column_dimensions["A"].width = 32
+        summary_sheet.column_dimensions["B"].width = 48
+
+        details_sheet = workbook.create_sheet("Contratos")
+        append_header(details_sheet, ["Contrato", "Considerar DMA", "Desconsiderar DMA", "Resultado"])
+        for letter, width in (("A", 24), ("B", 20), ("C", 24), ("D", 72)):
+            details_sheet.column_dimensions[letter].width = width
+
+        database = connect_journal(self.details_db_path)
+        try:
+            for item in iter_items(database, self.job_id):
+                details_sheet.append([
+                    safe_excel_text(item["contract"]),
+                    str(bool(item["consider_dma"])).lower(),
+                    str(bool(item["disregard_dma"])).lower(),
+                    item["status"],
+                ])
+        finally:
+            database.close()
+        workbook.save(destination)
+
     def _apply_log_filter(self, _event=None):
         for item in self.table.get_children():
             self.table.delete(item)
 
         filtro = self.log_filter.get()
-        linhas = self.log_rows
-        if filtro == "Somente falhas":
-            linhas = [item for item in linhas if not str(item.get("status", "")).casefold().startswith("ok")]
-        elif filtro == "Somente sucessos":
-            linhas = [item for item in linhas if str(item.get("status", "")).casefold().startswith("ok")]
+        if self.job_id and self.details_db_path:
+            database = connect_journal(self.details_db_path)
+            try:
+                count = count_items(database, self.job_id, filtro)
+                total_pages = max(1, (count + self.page_size - 1) // self.page_size)
+                self.log_page = min(self.log_page, total_pages - 1)
+                visible_rows = page_items(database, self.job_id, filtro, self.page_size, self.log_page * self.page_size)
+            finally:
+                database.close()
+        else:
+            linhas = self.log_rows
+            if filtro == "Somente falhas":
+                linhas = [item for item in linhas if not str(item.get("status", "")).casefold().startswith("ok")]
+            elif filtro == "Somente sucessos":
+                linhas = [item for item in linhas if str(item.get("status", "")).casefold().startswith("ok")]
+            count = len(linhas)
+            total_pages = max(1, (count + self.page_size - 1) // self.page_size)
+            self.log_page = min(self.log_page, total_pages - 1)
+            start = self.log_page * self.page_size
+            visible_rows = linhas[start : start + self.page_size]
 
-        for index, item in enumerate(linhas):
-            sucesso = str(item.get("status", "")).casefold().startswith("ok")
+        self.page_label.set(f"Página {self.log_page + 1} de {total_pages} ({count} linhas)")
+        self.previous_page_button.configure(state="normal" if self.log_page else "disabled")
+        self.next_page_button.configure(state="normal" if self.log_page + 1 < total_pages else "disabled")
+
+        for index, item in enumerate(visible_rows):
+            status = item["status"] if hasattr(item, "keys") else item.get("status", "")
+            sucesso = str(status).casefold().startswith("ok")
             tags = () if sucesso else ("error",)
             if sucesso and index % 2:
                 tags = ("odd",)
@@ -381,13 +542,26 @@ class DMADesktopApp(tk.Tk):
                 "",
                 "end",
                 values=(
-                    item.get("contrato", ""),
-                    str(item.get("considerar_dma", "")).lower(),
-                    str(item.get("desconsiderar_dma", "")).lower(),
-                    item.get("status", ""),
+                    item["contrato"] if hasattr(item, "keys") and "contrato" in item.keys() else item.get("contrato", ""),
+                    str(item["consider_dma"] if hasattr(item, "keys") and "consider_dma" in item.keys() else item.get("considerar_dma", "")).lower(),
+                    str(item["disregard_dma"] if hasattr(item, "keys") and "disregard_dma" in item.keys() else item.get("desconsiderar_dma", "")).lower(),
+                    status,
                 ),
                 tags=tags,
             )
+
+    def _previous_page(self):
+        if self.log_page > 0:
+            self.log_page -= 1
+            self._apply_log_filter()
+
+    def _change_log_filter(self, _event=None):
+        self.log_page = 0
+        self._apply_log_filter()
+
+    def _next_page(self):
+        self.log_page += 1
+        self._apply_log_filter()
 
     def _process(self):
         path = self.selected_file.get()
@@ -395,6 +569,18 @@ class DMADesktopApp(tk.Tk):
             messagebox.showinfo("Selecione uma planilha", "Escolha um arquivo Excel antes de processar.", parent=self)
             return
         mode = "API simulada (nenhum dado será enviado à API real)" if MODO_TESTE_API else "API real"
+        if not MODO_TESTE_API and (
+            not CORAL_API_URL
+            or not CORAL_API_URL.lower().startswith(("https://", "http://"))
+            or "exemplo.com" in CORAL_API_URL.lower()
+            or not get_coral_auth_token()
+        ):
+            messagebox.showerror(
+                "Configuração incompleta",
+                "Para usar a API real, configure CORAL_API_URL e CORAL_AUTH_TOKEN no arquivo .env.",
+                parent=self,
+            )
+            return
         confirmation = (
             "Confirme os dados antes de iniciar:\n\n"
             f"Arquivo: {Path(path).name}\n"
@@ -407,7 +593,9 @@ class DMADesktopApp(tk.Tk):
         if not messagebox.askyesno("Confirmar processamento", confirmation, parent=self):
             return
         try:
-            content = Path(path).read_bytes()
+            if not Path(path).is_file():
+                raise OSError("O arquivo selecionado não está mais disponível.")
+            content = path
         except OSError as error:
             messagebox.showerror("Erro ao abrir arquivo", str(error), parent=self)
             return
@@ -415,16 +603,41 @@ class DMADesktopApp(tk.Tk):
         self.run_button.configure(state="disabled", text="Processando...")
         self.select_button.configure(state="disabled")
         self.remove_button.configure(state="disabled")
-        self.status.set("Processando planilha na API simulada...")
+        self.column_box.configure(state="disabled")
+        self.header_checkbox.configure(state="disabled")
+        self.disregard_radio.configure(state="disabled")
+        self.consider_radio.configure(state="disabled")
+        self.status.set("Processando na API simulada..." if MODO_TESTE_API else "Enviando contratos para a API real...")
         self._reset_results()
-        threading.Thread(target=self._worker, args=(content, self.action.get(), self.contract_column.get() or None, self.tem_cabecalho.get()), daemon=True).start()
+        threading.Thread(target=self._worker, args=(content, self.action.get(), self.contract_column.get() or None, self.tem_cabecalho.get(), False), daemon=True).start()
         self.after(100, self._poll_result)
 
-    def _worker(self, content, action, column, tem_cabecalho):
+    def _worker(self, content, action, column, tem_cabecalho, force_uncertain=False, force_new=False):
         try:
-            self.result_queue.put((True, processar_e_enviar_planilha(content, action, column, tem_cabecalho)))
+            self.result_queue.put((True, processar_e_enviar_planilha(
+                content, action, column, tem_cabecalho,
+                force_uncertain=force_uncertain, stream_results=True, force_new=force_new,
+            )))
         except Exception as error:
             self.result_queue.put((False, str(error)))
+
+    def _start_followup(self, force_uncertain=False, force_new=False):
+        path = self.selected_file.get()
+        self._reset_results()
+        self.run_button.configure(state="disabled", text="Retomando...")
+        self.select_button.configure(state="disabled")
+        self.remove_button.configure(state="disabled")
+        self.column_box.configure(state="disabled")
+        self.header_checkbox.configure(state="disabled")
+        self.disregard_radio.configure(state="disabled")
+        self.consider_radio.configure(state="disabled")
+        self.status.set("Reenviando somente após confirmação..." if force_uncertain else "Iniciando um novo processamento...")
+        threading.Thread(
+            target=self._worker,
+            args=(path, self.action.get(), self.contract_column.get() or None, self.tem_cabecalho.get(), force_uncertain, force_new),
+            daemon=True,
+        ).start()
+        self.after(100, self._poll_result)
 
     def _poll_result(self):
         try:
@@ -436,11 +649,17 @@ class DMADesktopApp(tk.Tk):
         self.run_button.configure(state="normal", text="Processar contratos  \u2192")
         self.select_button.configure(state="normal")
         self.remove_button.configure(state="normal" if self.selected_file.get() else "disabled")
+        self.column_box.configure(state="readonly" if self.columns else "disabled")
+        self.header_checkbox.configure(state="normal" if self.selected_file.get() else "disabled")
+        self.disregard_radio.configure(state="normal")
+        self.consider_radio.configure(state="normal")
         if not success:
             self.status.set("Nao foi possivel processar a planilha.")
             messagebox.showerror("Erro no processamento", result, parent=self)
             return
 
+        self.details_db_path = result.get("detalhes_db")
+        self.job_id = result.get("job_id")
         self.total_label.value_label.configure(text=str(result["total"]))
         self.success_label.value_label.configure(text=str(result["sucesso"]))
         self.fail_label.value_label.configure(text=str(result["falhas"]))
@@ -450,7 +669,7 @@ class DMADesktopApp(tk.Tk):
         tipo_coluna = result.get("coluna_contrato", "")
         prefixo_coluna = "" if result.get("tem_cabecalho") else " (sem cabecalho)"
         self.column_used.set(f"Coluna usada: {tipo_coluna}{prefixo_coluna}. {ignored} linha(s) vazia(s) ignorada(s).")
-        self.log_rows = result["detalhes"]
+        self.log_rows = result.get("detalhes") or []
         self.report_metadata = {
             "arquivo": self.selected_name.get(),
             "data_hora": datetime.now().astimezone(),
@@ -463,7 +682,25 @@ class DMADesktopApp(tk.Tk):
             "falhas": result.get("falhas", 0),
             "linhas_ignoradas": ignored,
         }
-        self.export_button.configure(state="normal" if self.log_rows else "disabled")
+        self.export_button.configure(state="normal" if self.log_rows or self.job_id else "disabled")
+        if result.get("incertos", 0) and not result.get("forcou_incertos"):
+            resend = messagebox.askyesno(
+                "Há resultados incertos",
+                f"{result['incertos']} contrato(s) podem ter sido alterados pela Coral, mas a confirmação não chegou. Confira esses contratos na Coral antes de decidir.\n\nDeseja reenviar mesmo assim?",
+                parent=self,
+            )
+            if resend:
+                self._start_followup(force_uncertain=True)
+                return
+        if result.get("ja_processados", 0) and not result.get("enviados", 0) and not result.get("forcou_novo"):
+            rerun = messagebox.askyesno(
+                "Contratos já processados",
+                f"Todos os {result['ja_processados']} contratos já aparecem como confirmados neste processamento. Deseja iniciar uma nova execução e enviá-los novamente?",
+                parent=self,
+            )
+            if rerun:
+                self._start_followup(force_new=True)
+                return
         self._apply_log_filter()
 
 

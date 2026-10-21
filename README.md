@@ -20,13 +20,15 @@ python desktop\main.py
 
 ## Configuração local
 
-Copie `backend/.env.example` para `backend/.env` e preencha os valores somente quando o endpoint oficial estiver disponível. O arquivo `.env` não deve ser enviado ao Git.
+Em desenvolvimento, copie `backend/.env.example` para `backend/.env`. Ao usar o executavel, coloque o `.env` ao lado de `ConciliacaoDMA.exe` e configure `CORAL_API_URL` e `CORAL_AUTH_TOKEN`. O `.env` nao deve ser enviado ao Git.
 
 Mantenha `MODO_TESTE_API=true` enquanto estiver usando a simulação.
 
 ## Gerar o executável
 
-Execute `backend/build_exe.bat` no Windows. O executável será gerado em `dist/ConciliacaoDMA.exe`. A pasta `dist/` e os dados locais de planilhas são ignorados pelo Git.
+Execute `backend/build_exe.bat` no Windows. O build usa `backend/ConciliacaoDMA.spec` como configuração única e gera `dist/ConciliacaoDMA.exe`. A pasta `dist/` e os dados locais de planilhas são ignorados pelo Git.
+
+Arquivos `.xlsx` são lidos em fluxo, preservando identificadores de texto e zeros à esquerda de células numéricas com formato simples de zeros. A tabela e a exportação consultam resultados em SQLite para limitar o uso de memória. O checkpoint permite retomar o mesmo arquivo e ação sem reenviar contratos já confirmados. Falhas de rede e respostas HTTP 5xx ficam como incertas e exigem conferência antes de reenvio; chamadas de alteração não são repetidas automaticamente. O checkpoint local, que contém os detalhes para o relatório, é mantido por até 30 dias em `%LOCALAPPDATA%/ConciliacaoDMA/processamentos.sqlite3`. O log técnico não inclui números de contrato nem credenciais e fica em `%LOCALAPPDATA%/ConciliacaoDMA/logs/conciliacao.log`.
 
 ## Segurança dos dados
 

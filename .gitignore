@@ -15,6 +15,7 @@ build/
 dist/
 *.exe
 *.spec
+!backend/ConciliacaoDMA.spec
 
 # Local business data and generated reports
 *.xlsx
@@ -28,3 +29,6 @@ Relatorio_DMA_*
 Thumbs.db
 Desktop.ini
 *.log
+*.sqlite
+*.sqlite3
+*.db
